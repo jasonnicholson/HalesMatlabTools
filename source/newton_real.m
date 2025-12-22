@@ -218,26 +218,26 @@ function res = quadratic(n, a, res)
     if a(2) == 0 % a[1] == 0
       r = -a(3) / a(1); % -a[2]/a[0]
       if r < 0
-        res(2) = complex(0, sqrt(-r));
-        res(3) = complex(0, -imag(res(2)));
+        res(1) = complex(0, sqrt(-r));
+        res(2) = complex(0, -imag(res(1)));
       else
-        res(2) = complex(sqrt(r), 0);
-        res(3) = complex(-real(res(2)), 0);
+        res(1) = complex(sqrt(r), 0);
+        res(2) = complex(-real(res(1)), 0);
       end
     else
       r = 1 - 4 * a(1) * a(3) / (a(2) * a(2));
       if r < 0
         val1 = complex( -a(2)/(2*a(1)), a(2)*sqrt(-r)/(2*a(1)) );
-        res(2) = val1;
-        res(3) = complex(real(val1), -imag(val1));
+        res(1) = val1;
+        res(2) = complex(real(val1), -imag(val1));
       else
         val1 = complex( (-1 - sqrt(r)) * a(2) / (2 * a(1)), 0 );
-        res(2) = val1;
-        res(3) = complex( a(3) / (a(1) * real(val1)), 0 );
+        res(1) = val1;
+        res(2) = complex( a(3) / (a(1) * real(val1)), 0 );
       end
     end
   elseif n == 1
-    res(2) = complex( -a(2) / a(1), 0 );
+    res(1) = complex( -a(2) / a(1), 0 );
   end
 end
 

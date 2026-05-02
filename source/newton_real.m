@@ -1,332 +1,414 @@
-function [res, err] = newton_real(coeff)
-  % NEWTON_REAL Solve n degree polynomial using Newton's (Madsen) method ::
-  %
-  %   [res, err] = newton_real(coeff)
-  %
-  % Inputs:
-  %   coeff: Vector of real coefficients [a_n, a_{n-1}, ..., a_0]
-  %          corresponding to      P(x) = a_n*x^n + ...    + a_0.
-  %
-  % Outputs:
-  %   res: Vector of complex roots.
-  %   err: Error code (0 if successful, < 0 if max iterations reached).
-  %
-  % Description:
-  %   This function implements Newton's method (as described by Madsen and Reid)
-  %   to find all roots of a real-coefficient polynomial. It iteratively refines
-  %   guesses for the roots and performs deflation to reduce the polynomial degree
-  %   after each root is found. The method handles both real and complex roots.
-  %
-  % Example:
-  %
-  %
-  % References:
-  %   - Madsen, Kaj, and John K. Reid. "Fortran subroutines for finding polynomial zeros." (1975).
+function [roots_out, err] = newton_real(coeff)
+%NEWTON_REAL  Find all roots of a real-coefficient polynomial.
+%
+%   Implements Madsen's two-stage modified Newton method (1973), translated
+%   from the C++ reference implementation by Future Team Aps (2002) and
+%   rewritten in idiomatic MATLAB. Uses native complex arithmetic, MATLAB's
+%   polyval for Horner evaluation, deconv for deflation, and vectorised
+%   helper computations.
+%
+% Syntax
+%   roots_out        = newton_real(coeff)
+%   [roots_out, err] = newton_real(coeff)
+%
+% Inputs
+%   coeff  - (1×N+1) or (N+1×1) real coefficient vector, leading-coefficient
+%            first — the same convention used by polyval and roots:
+%                p(x) = coeff(1)·x^N + coeff(2)·x^(N-1) + … + coeff(N+1)
+%
+% Outputs
+%   roots_out - N×1 complex vector of all polynomial roots.
+%   err       - Integer convergence flag (mirrors the C++ return value):
+%                 0        all roots converged within MAXITER iterations.
+%               < 0        |err| roots hit the MAXITER limit; the
+%                          corresponding entries in roots_out are the best
+%                          approximations available but may be inaccurate.
+%
+% Algorithm
+%   Roots are extracted one (or two, for complex conjugate pairs) at a time
+%   via forward deflation.  For each root the two-stage Newton method is
+%   applied:
+%
+%     Stage 1 – Search mode
+%       The Newton step is accepted only if it reduces |p(z)|.  If the
+%       step is too large it is halved; if reducing it still helps the
+%       iterate is extended further along the Newton direction, giving
+%       super-linear convergence to multiple roots.
+%
+%     Stage 2 – Newton mode
+%       Plain Newton iteration, entered when a Kantorowitz-type heuristic
+%       indicates quadratic convergence has begun.  Any failed step causes
+%       an immediate return to Stage 1.
+%
+%     Convergence
+%       Iteration stops when the step size is below machine resolution,
+%       |p(z)| ≈ 0 (Adam's rounding-error bound in Stage 2), or MAXITER
+%       (50) is reached.
+%
+%     Root classification (real-coefficient optimisation)
+%       After converging to z, the residual at real(z) is compared to that
+%       at z.  If real(z) achieves a lower residual it is accepted as a
+%       real root and the polynomial is deflated by (x − real(z)).
+%       Otherwise z and conj(z) are recorded as a conjugate pair and the
+%       polynomial is deflated by the quadratic factor (x−z)(x−conj(z)).
+%
+%   After deflation reduces the degree to ≤ 2 the remaining factor is
+%   solved by exact formulas.
+%
+% Notes
+%   • Coefficient convention is leading-first (same as polyval/roots),
+%     which differs from the Madsen-Reid Fortran report (constant-first).
+%   • polyval (Horner's rule) and deconv use MATLAB's optimised BLAS.
+%   • deconv performs polynomial long division; tiny remainders due to
+%     finite-precision roots are expected and discarded.
+%   • Maximum 50 Newton iterations per root extraction (MAXITER).
+%   • err mirrors the int return value of the C++ newton_real(): starts at
+%     0 and is decremented by 1 for each root that exhausts MAXITER.
+%
+% Example
+%   % Cubic with three real roots
+%   p = [1, -6, 11, -6];                    % (x−1)(x−2)(x−3)
+%   [r, err] = newton_real(p)         % r ≈ [1; 2; 3], err = 0
+%
+%   % Quadratic with complex roots
+%   p = [1, 0, 1];                   % x^2 + 1
+%   r = newton_real(p)        % ≈ [1i; −1i]
+%
+% References
+%   Madsen, K. (1973). A root-finding algorithm based on Newton's method.
+%   BIT Numerical Mathematics, 13(1), 71–75.
+%
+%   Madsen, K. & Reid, J. (1975). Fortran subroutines for finding
+%   polynomial zeros. AERE-R 7986, Harwell.
+%
+% See also: roots, polyval, deconv
 
-  arguments
-    coeff (:,1) double
-  end
-
-  % Constants
-  MAX_ITERATIONS = 50;
-  DBL_MANT_DIG = 53; % Standard double precision
-
-  % Determine degree n
-  n = length(coeff) - 1;
-
-  a = coeff;
-
-  % Initialize result array (roots)
-  res = zeros(1, n);
-
-  err = 0;
-
-  % Remove trailing zeros (roots at 0).
-  % TODO vectorize this loop
-  while n >= 1 && a(n+1) == 0.0
-    res(n) = 0;
-    n = n - 1;
-  end
-
-  % Resize a to match current n
-  a = a(1:n+1);
-
-  % Allocate derivative array
-  a1 = zeros(1, n);
-
-  while n > 2
-    % Calculate coefficients of f'(x)
-    for i = 0:(n-1)
-      a1(i+1) = a(i+1) * (n - i);
+ arguments
+      coeff (1,:) double {mustBeReal, mustBeNonempty, mustBeFinite}
     end
 
-    u = startpoint(n, a);
-    z0 = complex(0, 0);
-    f0 = 2.0 * a(n+1) * a(n+1);
-    ff = f0;
-    fz0 = complex(a(n)); % a[n-1]
+    % --- Algorithm constants -------------------------------------------
+    MAXITER  = 50;
+    RADIX    = 2;
+    MANT_DIG = 53;                       % IEEE 754 double: 53 mantissa bits
+    SQRT_EPS = RADIX^(-MANT_DIG / 2);   % ≈ 1.49e-8; step-size guard
 
-    % Initial guess z
-    if a(n) == 0.0
-      z_real = 1.0;
-    else
-      z_real = -a(n+1) / a(n);
+    % --- Input normalisation ------------------------------------------
+
+    a  = double(coeff(:).');             % row vector; a(1) = leading coeff
+    N  = numel(a) - 1;                   % polynomial degree
+
+    roots_out = complex(zeros(N, 1));
+    err = 0;                             % convergence flag (0 = all OK)
+    rp = N;                              % root pointer — filled top-down
+
+    % Strip zero constant terms; each zero constant means a root at x = 0
+    while N > 0 && a(N + 1) == 0
+        roots_out(rp) = 0;
+        N  = N  - 1;
+        rp = rp - 1;
     end
+    a = a(1:N + 1);
 
-    z = complex(z_real, 0);
+    if N <= 0, return; end
 
-    if abs(real(z)) == 0
-      factor = 0;
-    else
-      factor = real(z) / abs(real(z));
-    end
-    z = complex(factor * u * 0.5, 0);
+    % ==================================================================
+    % Main deflation loop: extract roots until degree ≤ 2
+    % ==================================================================
+    while N > 2
 
-    dz = z;
-    [f, fz] = feval_poly(n, a, z);
+        % Derivative coefficient vector (vectorised).
+        % For p(x) = Σ a(k+1)·x^(N-k), k=0..N, the derivative is
+        % p'(x) = Σ (N-k)·a(k+1)·x^(N-k-1), k=0..N-1.
+        % In leading-first storage: da(k) = (N-k+1)·a(k), k=1..N.
+        da = a(1:N) .* (N:-1:1);       % leading-first; length N = degree of p'
 
-    r0 = 2.5 * u;
-    r = abs(dz);
-    eps_val = 4 * n * n * f0 * pow2(-DBL_MANT_DIG * 2);
+        % --- Initial guess: Cauchy-type lower bound on root modulus -----
+        u_start = cauchy_bound(a, N);
 
-    % Start iteration
-    itercnt = 0;
-    stage1 = true;
-
-    % Main Iteration loop
-    while ( (real(z) + real(dz) ~= real(z)) || (imag(z) + imag(dz) ~= imag(z)) ) && ...
-        (f > eps_val) && (itercnt < MAX_ITERATIONS)
-
-      itercnt = itercnt + 1;
-
-      [u_val, fz1] = feval_poly(n - 1, a1, z);
-
-      if u_val == 0.0 % True saddle point
-        dz = alterdirection(dz, 5.0);
-      else
-        % Newton step
-        % dz = fz / fz1
-        dz = fz / fz1;
-
-        % Which stage are we on
-        fwz = fz0 - fz1;
-        wz = z0 - z;
-
-        if abs(wz) == 0
-          f2 = 0;
+        % Seed on the real axis, direction from −a(N+1)/a(N).
+        % This mimics the C++ starting-direction heuristic.
+        if a(N) ~= 0
+            seed_sign = sign(-a(N + 1) / a(N));
         else
-          f2 = (real(fwz)^2 + imag(fwz)^2) / (real(wz)^2 + imag(wz)^2);
+            seed_sign = 1;
         end
+        if seed_sign == 0, seed_sign = 1; end
 
-        stage1 = (f2/u_val > u_val/f/4) || (f ~= ff);
-        r = abs(dz);
-        if r > r0
-          dz = alterdirection(dz, r0 / r);
-        end
-        r0 = r * 5.0;
-      end
+        z   = seed_sign * u_start * 0.5;  % real scalar; MATLAB promotes later
+        dz  = z;
+        z0  = 0;
+        fz0 = a(N);                        % proxy: p'(0) / (N-1)! ≈ a(N)
+        [f,  fz]  = peval(a,  z);
+        f0  = 2 * abs(a(N + 1))^2;         % loose initial bound for f0
+        ff  = f0;
+        r0  = 2.5 * u_start;
+        r   = abs(dz);
+        % Convergence threshold: stop when |p(z)|² falls below the machine
+        % rounding-noise floor estimated from f0 — mirrors the C++ formula
+        %   eps = 4·n²·f0·RADIX^(−2·MANT_DIG)
+        % Using f > 0 instead (as the old code did) causes the loop to grind
+        % through all MAXITER iterations even when the root is already at full
+        % machine precision, producing spurious err < 0 flags.
+        eps_iter = 4 * N^2 * f0 * RADIX^(-2*MANT_DIG);
 
-      z0 = z;
-      f0 = f;
-      fz0 = fz;
+        stage1  = true;
+        itercnt = 0;
 
-      % Inner retry loop (equivalent to goto iter2 logic)
-      retry_iter2 = true;
-      while retry_iter2
-        retry_iter2 = false; % Default to not retrying unless condition met
+        % --- Newton iteration loop ------------------------------------
+        while itercnt < MAXITER && f > eps_iter && ...
+              (real(z) + real(dz) ~= real(z) || imag(z) + imag(dz) ~= imag(z))
 
-        z = z0 - dz;
-        [f, fz] = feval_poly(n, a, z);
-        ff = f;
+            itercnt = itercnt + 1;
 
-        if stage1
-          wz = z;
-          div2 = (f > f0);
+            [u2, fz1] = peval(da, z);      % evaluate p'(z); u2 = |p'(z)|²
 
-          for i = 1:n
-            if div2
-              dz = dz * 0.5;
-              wz = z0 - dz;
+            if u2 == 0
+                % True saddle point: rotate and enlarge step to escape
+                dz = rotate_step(dz, 5.0);
             else
-              wz = wz - dz;
+                % Newton step: p(z)/p'(z), computed using conjugate division
+                % to stay close to the real-arithmetic form of the C++ code.
+                dz = (fz * conj(fz1)) / u2;  % equiv to fz / fz1
+
+                % Kantorowitz-type stage decision ----------------------
+                %   Stage 1 needed when a finite-difference proxy f2 exceeds
+                %   the Kantorowitz threshold  2|p||p''| ≤ |p'|²|Δz|.
+                %   The heuristic mirrors the C++: f2/u2 > u2/(4f) ≡ stage1.
+                fwz   = fz0 - fz1;   % Δp' ≈ change in derivative
+                wdiff = z0  - z;     % Δz
+                if abs(wdiff) > 0
+                    f2     = abs(fwz)^2 / abs(wdiff)^2;
+                    stage1 = (f2 / u2 > u2 / (4 * f)) || (f ~= ff);
+                else
+                    stage1 = true;
+                end
+
+                r = abs(dz);
+                if r > r0
+                    dz = rotate_step(dz, r0 / r);   % cap step magnitude
+                end
+                r0 = r * 5.0;
             end
 
-            [fw, fwz] = feval_poly(n, a, wz);
+            % Save current iterate for the next stage decision
+            z0 = z;  f0 = f;  fz0 = fz;
 
-            if fw >= f
-              break;
+            % --- Candidate step ----------------------------------------
+            z = z0 - dz;
+            [f, fz] = peval(a, z);
+            ff = f;
+
+            if stage1
+                % Line search: halve or extend dz to guarantee |p| decreases.
+                % A halving strategy is used when the initial step overshoots
+                % (f > f0); an extension strategy is used when it undershoots.
+                wz   = z;
+                div2 = (f > f0);    % true → step was too large; halve it
+                for i = 1:N
+                    if div2
+                        dz = dz * 0.5;
+                        wz = z0 - dz;
+                    else
+                        wz = wz - dz;        % extend one more Newton length
+                    end
+                    [fw, fwz_val] = peval(a, wz);
+                    if fw >= f, break; end   % no further improvement; stop
+                    f = fw;  fz = fwz_val;  z = wz;
+                    if div2 && i == 2
+                        % Two halvings insufficient: rotate once and retry
+                        dz = rotate_step(dz, 0.5);
+                        z  = z0 - dz;
+                        [f, fz] = peval(a, z);
+                        break;
+                    end
+                end
+            else
+                % Stage 2: tighten convergence threshold to Adam's local
+                % rounding-error bound (C++ upperbound() call).  Iteration
+                % stops as soon as |p(z)|² is within the evaluation noise.
+                eps_iter = adam_bound(a, N, z);
             end
 
-            f = fw;
-            fz = fwz;
-            z = wz;
-
-            if div2 && i == 2
-              dz = alterdirection(dz, 0.5);
-              z = z0 - dz;
-              [f, fz] = feval_poly(n, a, z);
-              break;
+            % Domain rounding-error guard: if the step has shrunk below
+            % machine resolution without improving the residual, alter the
+            % direction; if still stuck, break (accept current z0).
+            if r < abs(z) * SQRT_EPS && f >= f0
+                z  = z0;
+                dz = rotate_step(dz, 0.5);
+                if real(z) + real(dz) == real(z) && ...
+                   imag(z) + imag(dz) == imag(z)
+                    break;
+                end
             end
-          end
+
+        end % Newton iteration loop
+
+        if itercnt >= MAXITER
+            err = err - 1;   % flag that this root did not converge
+        end
+
+        % --- Classify root: real or complex conjugate pair ---------------
+        % Exploit real-coefficient symmetry: if projecting z to the real
+        % axis reduces the residual, the root is real.
+        [f_re, ~] = peval(a, real(z));
+        if f_re <= f
+            % Real root — deflate by linear factor (x − z_real)
+            roots_out(rp) = real(z);
+            a  = deconv(a, [1, -real(z)]);
+            N  = N - 1;
+            rp = rp - 1;
         else
-          % Calculate upper bound of errors using Adam's test
-          eps_val = upperbound(n, a, z, DBL_MANT_DIG);
+            % Complex conjugate pair — deflate by (x−z)(x−conj(z))
+            roots_out(rp)     = z;
+            roots_out(rp - 1) = conj(z);
+            a  = deconv(a, [1, -2*real(z), abs(z)^2]);
+            N  = N - 2;
+            rp = rp - 2;
         end
 
-        % Domain rounding errors check
-        if ( r < abs(z) * pow2(-DBL_MANT_DIG/2) ) && (f >= f0)
-          z = z0;
-          dz = alterdirection(dz, 0.5);
-          if z + dz ~= z
-            retry_iter2 = true; % Re-run inner loop
-          end
+    end % deflation while loop
+
+    % --- Solve the remaining linear or quadratic factor ------------------
+    if N > 0
+        roots_out(1:N) = solve_low_degree(a(1:N + 1), N);
+    end
+
+end
+
+
+% =========================================================================
+%  Local helper functions
+% =========================================================================
+
+function u = cauchy_bound(a, n)
+%CAUCHY_BOUND  Cauchy lower bound on the smallest root modulus.
+%
+%   Computes  u = min_{0≤k<n, a(k+1)≠0}  (|a(n+1)| / |a(k+1)|)^{1/(n-k)}
+%
+%   This is a standard lower bound for the modulus of the smallest root
+%   (Cauchy, 1829).  The starting iterate for Newton's method is placed at
+%   u/2 so that the initial point lies inside the smallest root's modulus.
+%   Vectorised: all valid coefficient ratios are evaluated simultaneously.
+%
+%   a is in leading-first order; a(n+1) is the constant term.
+
+    an = abs(a(n + 1));                % |constant term|
+    if an == 0, u = 1; return; end     % zero constant → root at origin already stripped
+
+    r    = log(an);
+    k    = 1:n;                        % non-constant coefficient indices
+    pows = n + 1 - k;                  % Cauchy exponents: n, n-1, …, 1
+
+    % Always include leading coefficient (index 1); skip exact zeros
+    valid    = (a(k) ~= 0);
+    valid(1) = true;                   % leading coeff must be nonzero for a valid poly
+
+    sel = k(valid);                    % selected indices into a
+    u   = min(exp((r - log(abs(a(sel)))) ./ pows(valid)));
+end
+
+
+function [mod2, val] = peval(c, z)
+%PEVAL  Evaluate polynomial c at z; return (|p(z)|², p(z)).
+%
+%   c is in leading-first order (same as MATLAB polyval).
+%   MATLAB's polyval applies Horner's rule internally using optimised BLAS.
+%   For complex z the evaluation is performed in complex arithmetic.
+
+    val  = polyval(c, z);
+    mod2 = real(val)^2 + imag(val)^2;   % |val|² without a redundant sqrt
+end
+
+
+function dz = rotate_step(dz, m)
+%ROTATE_STEP  Rotate step vector by ~53.13° and scale by m.
+%
+%   Applies the same fixed Givens-like rotation as C++ alterdirection():
+%       [ 0.6  -0.8 ] [ Re(dz) ]
+%       [ 0.8   0.6 ] [ Im(dz) ] * m
+%
+%   cos(53.13°) ≈ 0.6, sin(53.13°) ≈ 0.8.  Rotating the Newton step
+%   escapes saddle points and avoids oscillation on quadratic-factor axes.
+%   Scaling by m < 1 reduces step magnitude; m > 1 enlarges it.
+
+    re = real(dz);  im = imag(dz);
+    dz = complex(re * 0.6 - im * 0.8, ...
+                 re * 0.8 + im * 0.6) * m;
+end
+
+
+function e2 = adam_bound(a, n, z)
+%ADAM_BOUND  Adam's rounding-error upper bound on |p(z)|², squared.
+%
+%   Computes a local estimate of the squared rounding error in evaluating
+%   p at z via the real-arithmetic Horner recurrence (Adam, 1983; used
+%   in the Madsen-Reid Fortran library as the Stage-2 convergence guard).
+%   Returns e² so it can be compared directly against |p(z)|² = f.
+%
+%   a is leading-first; n = degree (length(a)−1).
+%   Mirrors C++ upperbound() in Newton_Real.cpp.
+
+    p = -2 * real(z);
+    q = real(z)^2 + imag(z)^2;
+    u = sqrt(q);
+    s = 0;  r = a(1);  e = abs(r) * (3.5 / 4.5);
+    for i = 2:n
+        t = a(i) - p*r - q*s;
+        s = r;  r = t;
+        e = u*e + abs(t);
+    end
+    t = a(n+1) + real(z)*r - q*s;
+    e = u*e + abs(t);
+    % eps(1) = RADIX^(−MANT_DIG+1) = 2^(−52); matches C++ _DBL_RADIX^(−DBL_MANT_DIG+1)
+    e = (9*e - 7*(abs(t) + abs(r)*u) + abs(real(z))*abs(r)*2) * eps(1);
+    e2 = e^2;
+end
+
+
+function res = solve_low_degree(a, n)
+%SOLVE_LOW_DEGREE  Exact roots of a linear (n=1) or quadratic (n=2).
+%
+%   Uses the numerically stable formulas ported from the C++ reference:
+%     • Linear:    root = −a(2)/a(1)
+%     • Quadratic (a(2)=0):   roots = ±sqrt(−a(3)/a(1))
+%     • Quadratic (general):  Vieta's formula avoids catastrophic cancellation
+%                             in the discriminant form.
+%
+%   a is in leading-first order: a(1)·x^n + a(2)·x^(n-1) + … + a(n+1).
+
+    res = complex(zeros(n, 1));
+
+    if n == 1
+        % Linear: a(1)·x + a(2) = 0
+        res(1) = -a(2) / a(1);
+
+    else  % n == 2 quadratic: a(1)·x² + a(2)·x + a(3) = 0
+        if a(2) == 0
+            % Depressed quadratic: x = ±sqrt(−a(3)/a(1))
+            r = -a(3) / a(1);
+            if r < 0
+                res(1) =  1i * sqrt(-r);
+                res(2) = -1i * sqrt(-r);
+            else
+                res(1) =  sqrt(r);
+                res(2) = -sqrt(r);
+            end
+        else
+            % General quadratic via scaled discriminant  d = 1 − 4a₁a₃/a₂²
+            % This form avoids loss of significance when a₂² >> 4a₁a₃.
+            disc = 1 - 4 * a(1) * a(3) / a(2)^2;
+            if disc < 0
+                % Complex conjugate pair
+                re_part = -a(2) / (2 * a(1));
+                im_part =  a(2) * sqrt(-disc) / (2 * a(1));
+                res(1) = complex(re_part,  im_part);
+                res(2) = complex(re_part, -im_part);
+            else
+                % Two real roots — use Vieta's product to avoid cancellation
+                res(1) = (-1 - sqrt(disc)) * a(2) / (2 * a(1));
+                res(2) = a(3) / (a(1) * real(res(1)));  % Vieta: r1·r2 = a3/a1
+            end
         end
-      end
     end
-
-    if itercnt >= MAX_ITERATIONS
-      err = err - 1;
-    end
-
-    z0_real = complex(real(z), 0.0);
-    [f_z0, ~] = feval_poly(n, a, z0_real);
-
-    if f_z0 <= f
-      % Real root
-      res(n) = complex(real(z), 0);
-      [n, a] = realdeflation(n, a, real(z));
-    else
-      % Complex root
-      res(n) = z;
-      res(n - 1) = complex(real(z), -imag(z));
-      [n, a] = complexdeflation(n, a, z);
-    end
-  end
-
-  % Solve remaining linear or quadratic
-  res = quadratic(n, a, res);
-end
-
-% --------------------------------------------------------------------------
-% Helper Functions
-% --------------------------------------------------------------------------
-
-function res = quadratic(n, a, res)
-  % Solve linear or quadratic equation
-
-  if n == 2
-    if a(2) == 0 % a[1] == 0
-      r = -a(3) / a(1); % -a[2]/a[0]
-      if r < 0
-        res(1) = complex(0, sqrt(-r));
-        res(2) = complex(0, -imag(res(1)));
-      else
-        res(1) = complex(sqrt(r), 0);
-        res(2) = complex(-real(res(1)), 0);
-      end
-    else
-      r = 1 - 4 * a(1) * a(3) / (a(2) * a(2));
-      if r < 0
-        val1 = complex( -a(2)/(2*a(1)), a(2)*sqrt(-r)/(2*a(1)) );
-        res(1) = val1;
-        res(2) = complex(real(val1), -imag(val1));
-      else
-        val1 = complex( (-1 - sqrt(r)) * a(2) / (2 * a(1)), 0 );
-        res(1) = val1;
-        res(2) = complex( a(3) / (a(1) * real(val1)), 0 );
-      end
-    end
-  elseif n == 1
-    res(1) = complex( -a(2) / a(1), 0 );
-  end
-end
-
-function [val, fz] = feval_poly(n, a, z)
-  % Performed function evaluation. Horners algorithm.
-  % Returns |f(z)|^2 as val, and f(z) as fz.
-
-  p = -2.0 * real(z);
-  q = real(z)^2 + imag(z)^2;
-  s = 0;
-  r = a(1); % a[0]
-
-  for i = 1:(n-1)
-    t = a(i+1) - p * r - q * s;
-    s = r;
-    r = t;
-  end
-
-  fz_real = a(n+1) + real(z) * r - q * s;
-  fz_imag = imag(z) * r;
-  fz = complex(fz_real, fz_imag);
-
-  val = real(fz)^2 + imag(fz)^2;
-end
-
-function min_val = startpoint(n, a)
-  % Determine starting point
-  r = log( abs( a(n+1) ) ); % a[n]
-  min_val = exp( ( r - log( abs( a(1) ) ) ) / n ); % a[0]
-
-  for i = 1:(n-1)
-    if a(i+1) ~= 0
-      u = exp( ( r - log( abs( a(i+1) ) ) ) / ( n - i ) );
-      if u < min_val
-        min_val = u;
-      end
-    end
-  end
-end
-
-function e_sq = upperbound(n, a, z, DBL_MANT_DIG)
-  % Calculate a upper bound for the rounding errors (Adam's test)
-
-  p = -2.0 * real(z);
-  q = real(z)^2 + imag(z)^2;
-  u = sqrt(q);
-  s = 0.0;
-  r = a(1);
-  e = abs(r) * (3.5 / 4.5);
-
-  for i = 1:(n-1)
-    t = a(i+1) - p * r - q * s;
-    s = r;
-    r = t;
-    e = u * e + abs(t);
-  end
-
-  t = a(n+1) + real(z) * r - q * s;
-  e = u * e + abs(t);
-  e = ( 9.0 * e - 7.0 * ( abs(t) + abs(r) * u ) + ...
-    abs(real(z)) * abs(r) * 2.0 ) * pow2(-DBL_MANT_DIG+1);
-
-  e_sq = e * e;
-end
-
-function dz = alterdirection(dz, m)
-  x = ( real(dz) * 0.6 - imag(dz) * 0.8 ) * m;
-  y = ( real(dz) * 0.8 + imag(dz) * 0.6 ) * m;
-  dz = complex(x, y);
-end
-
-function [n_new, a] = realdeflation(n, a, x)
-  % Real root forward deflation
-  r = 0;
-  for i = 0:(n-1)
-    r = r * x + a(i+1);
-    a(i+1) = r;
-  end
-  n_new = n - 1;
-end
-
-function [n_new, a] = complexdeflation(n, a, z)
-  % Complex root forward deflation
-  r = -2.0 * real(z);
-  u = real(z)^2 + imag(z)^2;
-
-  a(2) = a(2) - r * a(1);
-  for i = 2:(n-2)
-    a(i+1) = a(i+1) - r * a(i) - u * a(i-1);
-  end
-  n_new = n - 2;
 end

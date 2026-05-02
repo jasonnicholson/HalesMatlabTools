@@ -172,6 +172,200 @@ classdef newton_realTest < matlab.unittest.TestCase
       real_roots = res(abs(imag(res)) < 1e-10);
       testCase.verifyEqual(length(real_roots), 2, "Should have 2 real roots (1 and -1)");
     end
+
+    % --- err output -------------------------------------------------
+
+    % err output is 0 for a well-conditioned cubic
+    function testErrZeroOnNormalConvergence(testCase)
+      [~, err] = newton_real([1, -6, 11, -6]);
+      testCase.verifyEqual(err, 0, "err should be 0 for well-conditioned input");
+    end
+
+    % Single-output call must work without capturing err
+    function testErrOutputPresentSingleOutput(testCase)
+      res = newton_real([1, -5, 6]);
+      testCase.verifyEqual(numel(res), 2, "Single-output call should return 2 roots");
+    end
+
+    % --- Edge cases -------------------------------------------------
+
+    % Constant polynomial p(x) = 5 has no roots
+    function testConstantPolynomial(testCase)
+      res = newton_real([5]);
+      testCase.verifyEmpty(res, "Constant polynomial should return zero roots");
+    end
+
+    % p(x) = x^3 — three roots all at zero
+    function testAllZeroRoots(testCase)
+      res = newton_real([1, 0, 0, 0]);
+      testCase.verifyEqual(numel(res), 3, "Should have 3 roots");
+      testCase.verifyLessThan(max(abs(res)), 1e-7, "All roots should be at zero");
+    end
+
+    % --- Linear -----------------------------------------------------
+
+    % p(x) = x + 4 -> root = -4
+    function testLinearNegativeRoot(testCase)
+      [res, err] = newton_real([1, 4]);
+      testCase.verifyEqual(err, 0, "Error should be 0");
+      testCase.verifyEqual(real(res(1)), -4.0, 'AbsTol', 1e-14, "Root should be -4");
+      testCase.verifyEqual(imag(res(1)),  0.0, 'AbsTol', 1e-14, "Root should be real");
+    end
+
+    % --- Quadratic --------------------------------------------------
+
+    % p(x) = (x-3)^2 = x^2 - 6x + 9 — repeated root at 3
+    function testQuadraticRepeatedRoot(testCase)
+      [res, err] = newton_real([1, -6, 9]);
+      testCase.verifyEqual(err, 0, "Error should be 0");
+      testCase.verifyEqual(numel(res), 2, "Should have 2 roots");
+      testCase.verifyEqual(real(res(1)), 3.0, 'AbsTol', 1e-5, "Root should be 3");
+      testCase.verifyEqual(real(res(2)), 3.0, 'AbsTol', 1e-5, "Root should be 3");
+    end
+
+    % p(x) = x^2 - 4 -> roots ±2 (no linear term — depressed quadratic)
+    function testQuadraticDepressed(testCase)
+      [res, err] = newton_real([1, 0, -4]);
+      testCase.verifyEqual(err, 0, "Error should be 0");
+      roots_sorted = sort(real(res));
+      testCase.verifyEqual(roots_sorted(1), -2.0, 'AbsTol', 1e-14, "Root should be -2");
+      testCase.verifyEqual(roots_sorted(2),  2.0, 'AbsTol', 1e-14, "Root should be 2");
+    end
+
+    % p(x) = -x^2 + 4 -> roots ±2 (negative leading coefficient)
+    function testNegativeLeadingCoefficient(testCase)
+      [res, err] = newton_real([-1, 0, 4]);
+      testCase.verifyEqual(err, 0, "Error should be 0");
+      roots_sorted = sort(real(res));
+      testCase.verifyEqual(roots_sorted(1), -2.0, 'AbsTol', 1e-14, "Root should be -2");
+      testCase.verifyEqual(roots_sorted(2),  2.0, 'AbsTol', 1e-14, "Root should be 2");
+    end
+
+    % --- Cubic ------------------------------------------------------
+
+    % p(x) = (x-1)(x^2+1) -> one real root (1) and two complex roots (±i)
+    function testCubicOneRealTwoComplex(testCase)
+      coeff = [1, -1, 1, -1];
+      [res, err] = newton_real(coeff);
+      testCase.verifyEqual(err, 0, "Error should be 0");
+      testCase.verifyEqual(numel(res), 3, "Should have 3 roots");
+      is_real = abs(imag(res)) < 1e-10;
+      testCase.verifyEqual(sum(is_real), 1, "Expected exactly one real root");
+      testCase.verifyEqual(real(res(is_real)), 1.0, 'AbsTol', 1e-12, "Real root should be 1");
+      complex_roots = res(~is_real);
+      testCase.verifyEqual(abs(complex_roots(1)), 1.0, 'AbsTol', 1e-12, "Complex root modulus should be 1");
+    end
+
+    % --- Quartic ----------------------------------------------------
+
+    % p(x) = (x^2+1)(x^2+4) -> roots ±i, ±2i (two complex conjugate pairs)
+    function testQuarticTwoComplexPairs(testCase)
+      coeff = [1, 0, 5, 0, 4];
+      [res, err] = newton_real(coeff);
+      testCase.verifyEqual(err, 0, "Error should be 0");
+      testCase.verifyEqual(numel(res), 4, "Should have 4 roots");
+      moduli = sort(abs(res));
+      testCase.verifyEqual(moduli(1), 1.0, 'AbsTol', 1e-12, "Two roots should have modulus 1");
+      testCase.verifyEqual(moduli(2), 1.0, 'AbsTol', 1e-12);
+      testCase.verifyEqual(moduli(3), 2.0, 'AbsTol', 1e-12, "Two roots should have modulus 2");
+      testCase.verifyEqual(moduli(4), 2.0, 'AbsTol', 1e-12);
+      testCase.verifyLessThan(max(abs(real(res))), 1e-10, "All roots should be purely imaginary");
+    end
+
+    % p(x) = (x-1)(x-2)(x-3)(x-4) -> four distinct real roots
+    function testQuarticAllRealRoots(testCase)
+      coeff = [1, -10, 35, -50, 24];
+      [res, err] = newton_real(coeff);
+      testCase.verifyEqual(err, 0, "Error should be 0");
+      roots_sorted = sort(real(res));
+      testCase.verifyEqual(roots_sorted(1), 1.0, 'AbsTol', 1e-12);
+      testCase.verifyEqual(roots_sorted(2), 2.0, 'AbsTol', 1e-12);
+      testCase.verifyEqual(roots_sorted(3), 3.0, 'AbsTol', 1e-12);
+      testCase.verifyEqual(roots_sorted(4), 4.0, 'AbsTol', 1e-12);
+    end
+
+    % --- Roots at zero ----------------------------------------------
+
+    % p(x) = x^2(x-5) -> roots 0, 0, 5
+    function testSingleRootAtZero(testCase)
+      coeff = [1, -5, 0, 0];
+      [res, err] = newton_real(coeff);
+      testCase.verifyEqual(err, 0, "Error should be 0");
+      roots_sorted = sort(real(res));
+      testCase.verifyEqual(roots_sorted(1), 0.0, 'AbsTol', 1e-10);
+      testCase.verifyEqual(roots_sorted(2), 0.0, 'AbsTol', 1e-10);
+      testCase.verifyEqual(roots_sorted(3), 5.0, 'AbsTol', 1e-12);
+    end
+
+    % --- Higher degree ----------------------------------------------
+
+    % p(x) = (x-1)(x-2)(x-3)(x-4)(x-5) -> five distinct real roots
+    function testDegree5AllReal(testCase)
+      true_roots = (1:5).';
+      coeff = poly(true_roots);
+      [res, err] = newton_real(coeff);
+      testCase.verifyEqual(err, 0, "Error should be 0");
+      roots_sorted = sort(real(res));
+      testCase.verifyEqual(roots_sorted, true_roots, 'AbsTol', 1e-6);
+    end
+
+    % p(x) = (x-1)(x-3)(x^2+1)(x^2+4) -> 2 real + 4 complex roots
+    function testDegree6MixedRoots(testCase)
+      coeff = conv(poly([1, 3]), conv([1, 0, 1], [1, 0, 4]));
+      [res, err] = newton_real(coeff);
+      testCase.verifyEqual(err, 0, "Error should be 0");
+      testCase.verifyEqual(numel(res), 6, "Should have 6 roots");
+      for k = 1:6
+        testCase.verifyEqual(abs(polyval(coeff, res(k))), 0.0, 'AbsTol', 1e-8, ...
+          sprintf("Root %d residual too large", k));
+      end
+    end
+
+    % --- Residual checks --------------------------------------------
+
+    % p(x) = (x-1)^4 — near-multiple root; verify by residual
+    function testResidualRepeatedRoot(testCase)
+      coeff = [1, -4, 6, -4, 1];
+      [res, err] = newton_real(coeff);
+      testCase.verifyLessThanOrEqual(err, 0, "err should be non-positive");
+      for k = 1:4
+        testCase.verifyEqual(abs(polyval(coeff, res(k))), 0.0, 'AbsTol', 1e-5, ...
+          sprintf("Root %d residual too large", k));
+      end
+    end
+
+    % 8 Chebyshev-spaced roots in (-1,1) — tests robustness to clustered roots
+    function testResidualChebyshevSpaced(testCase)
+      true_roots = cos((1:2:15) * pi / 16).';
+      coeff = real(poly(true_roots));
+      [res, err] = newton_real(coeff);
+      testCase.verifyLessThanOrEqual(err, 0, "err should be non-positive");
+      for k = 1:8
+        testCase.verifyEqual(abs(polyval(coeff, res(k))), 0.0, 'AbsTol', 1e-5, ...
+          sprintf("Root %d residual too large", k));
+      end
+    end
+
+    % --- Consistency with built-in roots() -------------------------
+
+    % Compare sorted real parts of quartic against MATLAB companion-matrix roots
+    function testConsistencyBuiltinRootsQuartic(testCase)
+      coeff   = [1, -10, 35, -50, 24];   % (x-1)(x-2)(x-3)(x-4)
+      r_ref   = sort(real(roots(coeff)));
+      [r_mine, err] = newton_real(coeff);
+      testCase.verifyEqual(err, 0, "Error should be 0");
+      testCase.verifyEqual(sort(real(r_mine)), r_ref, 'AbsTol', 1e-8);
+    end
+
+    % Compare root moduli of degree-4 complex-pair polynomial
+    function testConsistencyBuiltinRootsComplexPair(testCase)
+      coeff  = [1, 0, 5, 0, 4];
+      r_ref  = sort(abs(roots(coeff)));
+      [r_mine, err] = newton_real(coeff);
+      testCase.verifyEqual(err, 0, "Error should be 0");
+      testCase.verifyEqual(sort(abs(r_mine)), r_ref, 'AbsTol', 1e-7);
+    end
+
   end
 
 end

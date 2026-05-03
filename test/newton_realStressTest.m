@@ -6,6 +6,15 @@ classdef newton_realStressTest < matlab.unittest.TestCase
     % All polynomial evaluations and assertions are computed in
     % TestMethodSetup so that each Test method contains only assertions.
     %
+    % The pass criterion is a *scaled* residual:
+    %
+    %     max|p(r_k)| / max(1, max|r_k|^N) < RESIDUAL_TOL
+    %
+    % Scaling by max(1, max|r|^N) is necessary because |p(r)| can grow as
+    % |r|^N when an evaluated root is even slightly off in modulus, even
+    % though that root is correct to full machine precision. The scaled
+    % residual stays ~eps for accurate roots regardless of |r|.
+    %
     % See also: newton_real, newton_realTest
 
     % =====================================================================
@@ -15,24 +24,25 @@ classdef newton_realStressTest < matlab.unittest.TestCase
         N_TESTS             = 200      % number of random polynomials
         MIN_DEG             = 4        % smallest degree
         MAX_DEG             = 25       % largest degree
-        RESIDUAL_TOL        = 1e-4     % max |p(root)| threshold for pass
+        RESIDUAL_TOL        = 1e-6     % max scaled |p(root)| threshold for pass
         RANDOM_SEED         = 42       % fixed seed for reproducibility
-        OVERALL_PASS_RATE   = 0.95     % required overall success rate
-        LOW_DEG_PASS_RATE   = 0.98     % required rate for degrees  4–10
-        MID_DEG_PASS_RATE   = 0.96     % required rate for degrees 11–18
-        HIGH_DEG_PASS_RATE  = 0.90     % required rate for degrees 19–25
-        MEDIAN_RESIDUAL_MAX = 1e-6     % required median |p(root)| (passing)
+        OVERALL_PASS_RATE   = 0.98     % required overall success rate
+        LOW_DEG_PASS_RATE   = 1.00     % required rate for degrees  4–10
+        MID_DEG_PASS_RATE   = 0.97     % required rate for degrees 11–18
+        HIGH_DEG_PASS_RATE  = 0.97     % required rate for degrees 19–25
+        MEDIAN_RESIDUAL_MAX = 1e-12    % required median scaled |p(root)|
+        CONVERGE_RATE       = 0.98     % required err==0 rate
     end
 
     % =====================================================================
     %  Per-test result arrays — populated in TestMethodSetup
     % =====================================================================
     properties
-        Degrees       % (1 × N_TESTS) degree of each random polynomial
-        MaxResiduals  % (1 × N_TESTS) max |p(root_k)| over all roots
-        ErrFlags      % (1 × N_TESTS) err return value from newton_real
-        RootCounts    % (1 × N_TESTS) numel(roots_out) from newton_real
-        Passed        % (1 × N_TESTS) logical — residual < RESIDUAL_TOL
+        Degrees         % (1 × N_TESTS) degree of each random polynomial
+        ScaledResiduals % (1 × N_TESTS) max|p(root_k)| / max(1,|r|^N)
+        ErrFlags        % (1 × N_TESTS) err return value from newton_real
+        RootCounts      % (1 × N_TESTS) numel(roots_out) from newton_real
+        Passed          % (1 × N_TESTS) logical — scaled residual < RESIDUAL_TOL
     end
 
     % =====================================================================
@@ -43,11 +53,11 @@ classdef newton_realStressTest < matlab.unittest.TestCase
             rng(testCase.RANDOM_SEED, 'twister');
 
             n = testCase.N_TESTS;
-            testCase.Degrees      = randi([testCase.MIN_DEG, testCase.MAX_DEG], 1, n);
-            testCase.MaxResiduals = inf(1, n);
-            testCase.ErrFlags     = zeros(1, n);
-            testCase.RootCounts   = zeros(1, n);
-            testCase.Passed       = false(1, n);
+            testCase.Degrees         = randi([testCase.MIN_DEG, testCase.MAX_DEG], 1, n);
+            testCase.ScaledResiduals = inf(1, n);
+            testCase.ErrFlags        = zeros(1, n);
+            testCase.RootCounts      = zeros(1, n);
+            testCase.Passed          = false(1, n);
 
             for k = 1 : n
                 deg    = testCase.Degrees(k);
@@ -55,11 +65,12 @@ classdef newton_realStressTest < matlab.unittest.TestCase
 
                 [r, err] = newton_real(coeffs);
 
-                res = abs(polyval(coeffs, r));
-                testCase.MaxResiduals(k) = max(res);
-                testCase.ErrFlags(k)     = err;
-                testCase.RootCounts(k)   = numel(r);
-                testCase.Passed(k)       = (testCase.MaxResiduals(k) < testCase.RESIDUAL_TOL);
+                res    = abs(polyval(coeffs, r));
+                scale  = max(1, max(abs(r))^deg);
+                testCase.ScaledResiduals(k) = max(res) / scale;
+                testCase.ErrFlags(k)        = err;
+                testCase.RootCounts(k)      = numel(r);
+                testCase.Passed(k)          = (testCase.ScaledResiduals(k) < testCase.RESIDUAL_TOL);
             end
         end
     end
@@ -118,15 +129,15 @@ classdef newton_realStressTest < matlab.unittest.TestCase
         %  Residual quality for passing tests
         % -----------------------------------------------------------------
         function testPassingResidualsAreBelowTolerance(testCase)
-            passingResiduals = testCase.MaxResiduals(testCase.Passed);
+            passingResiduals = testCase.ScaledResiduals(testCase.Passed);
             testCase.verifyTrue(all(passingResiduals < testCase.RESIDUAL_TOL), ...
-                'Every test flagged as passing must have max|p(root)| < RESIDUAL_TOL.');
+                'Every test flagged as passing must have scaled max|p(root)| < RESIDUAL_TOL.');
         end
 
         function testMedianResidualIsSmall(testCase)
-            passingResiduals = testCase.MaxResiduals(testCase.Passed);
+            passingResiduals = testCase.ScaledResiduals(testCase.Passed);
             testCase.verifyLessThan(median(passingResiduals), testCase.MEDIAN_RESIDUAL_MAX, ...
-                sprintf('Median residual of passing tests exceeds %.0e.', ...
+                sprintf('Median scaled residual of passing tests exceeds %.0e.', ...
                 testCase.MEDIAN_RESIDUAL_MAX));
         end
 
@@ -135,9 +146,9 @@ classdef newton_realStressTest < matlab.unittest.TestCase
         % -----------------------------------------------------------------
         function testMostPolynomialsConverge(testCase)
             rate = mean(testCase.ErrFlags == 0);
-            testCase.verifyGreaterThanOrEqual(rate, testCase.OVERALL_PASS_RATE, ...
+            testCase.verifyGreaterThanOrEqual(rate, testCase.CONVERGE_RATE, ...
                 sprintf('Convergence rate %.1f%% is below the %.0f%% requirement.', ...
-                100*rate, 100*testCase.OVERALL_PASS_RATE));
+                100*rate, 100*testCase.CONVERGE_RATE));
         end
 
     end

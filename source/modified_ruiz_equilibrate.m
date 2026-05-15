@@ -1,8 +1,8 @@
 function [P, A, q, l, u, scaling] = modified_ruiz_equilibrate(P, A, q, l, u, scalingIterations, options)
-    %MODIFIED_RUIZ_EQUILIBRATE MATLAB translation of OSQP's scale_data routine.
-    %   [P, A, q, l, u, scaling] = modified_ruiz_equilibrate(P, A, q, l, u, scaling_iter)
-    %   applies Ruiz equilibration and cost normalization similarly to
-    %   src/scaling.c::scale_data in OSQP.
+    % modified_ruiz_equilibrate - Apply modified Ruiz equilibration to Quadratic Program data. 
+    % ::
+    %   
+    %   [P, A, q, l, u, scaling] = modified_ruiz_equilibrate(P, A, q, l, u, scaling_iter).
     %
     %   Inputs:
     %     P, A         Problem matrices (dense or sparse)
@@ -13,9 +13,20 @@ function [P, A, q, l, u, scaling] = modified_ruiz_equilibrate(P, A, q, l, u, sca
     %     P, A, q, l, u  Scaled problem data
     %     scaling        Struct with fields c, cinv, D, Dinv, E, Einv
     %
-    %   Notes:
-    %     - OSQP constants are mirrored: OSQP_MIN_SCALING=1e-4, OSQP_MAX_SCALING=1e4.
-    %     - Infinity norms are column/row max abs values, matching OSQP behavior.
+    % Description:
+    %   Iteratively applies diagonal scaling to force row/column infinity norms of P and A to be close to 1.
+    %   Also applies cost scaling to keep the infinity norm of q in check. The scaling  is accumulated in the output struct for later use in unscaling the solution.
+    %   This is called Modified Ruiz Equilibration. OSQP applies this scaling to improve the conditioning of the problem and thus the convergence of the solver.
+    %
+    % References:
+    %   B. Stellato, G. Banjac, P. Goulart, A. Bemporad, and S. Boyd,
+    %   "OSQP: An operator splitting solver for quadratic programs,"
+    %   Mathematical Programming Computation, vol. 12, pp. 637-672, 2020.
+    %   https://doi.org/10.1007/s12532-020-00179-2
+    %
+    %   OSQP source repository: https://github.com/osqp/osqp
+    %   Translated from: src/scaling.c, scale_data()
+    %
 
     %% Input validation
     arguments

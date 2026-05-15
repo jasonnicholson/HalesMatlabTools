@@ -74,7 +74,9 @@ function [P, A, q, l, u, scaling] = modified_ruiz_equilibrate(P, A, q, l, u, sca
         q = q .* D_temp'; % n x 1
 
         % Accumulate total scaling.
-        scaling.D = scaling.D .* D_temp;
+        %               n x 1              n x 1
+        scaling.D = scaling.D .* D_temp';
+        %               m x 1              m x 1 
         scaling.E = scaling.E .* E_temp;
 
         % Cost normalization.

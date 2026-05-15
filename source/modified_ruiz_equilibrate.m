@@ -1,4 +1,4 @@
-function [P, A, q, l, u, scaling] = modified_ruiz_equilibrate(P, A, q, l, u, scalingInterations, options)
+function [P, A, q, l, u, scaling] = modified_ruiz_equilibrate(P, A, q, l, u, scalingIterations, options)
     %MODIFIED_RUIZ_EQUILIBRATE MATLAB translation of OSQP's scale_data routine.
     %   [P, A, q, l, u, scaling] = modified_ruiz_equilibrate(P, A, q, l, u, scaling_iter)
     %   applies Ruiz equilibration and cost normalization similarly to
@@ -19,12 +19,12 @@ function [P, A, q, l, u, scaling] = modified_ruiz_equilibrate(P, A, q, l, u, sca
 
     %% Input validation
     arguments
-        P (:,:) {mustBeNumeric, mustBeReal, mustBeFinite};
-        A (:,:) {mustBeNumeric, mustBeReal, mustBeFinite};
-        q (:,1) {mustBeNumeric, mustBeReal, mustBeFinite, mustBeVector};
-        l (:,1) {mustBeNumeric, mustBeReal, mustBeFinite, mustBeVector};
-        u (:,1) {mustBeNumeric, mustBeReal, mustBeFinite, mustBeVector};
-        scalingInterations (1, 1) {mustBePositive, mustBeInteger} = 25;
+        P (:,:) double;
+        A (:,:) double;
+        q (:,1) double;
+        l (:,1) double;
+        u (:,1) double;
+        scalingIterations (1, 1) {mustBePositive, mustBeInteger} = 10;
         options.minScaling (1, 1) {mustBeReal, mustBeFinite, mustBePositive} = 1e-4;
         options.maxScaling (1, 1) {mustBeReal, mustBeFinite, mustBePositive} = 1e4;
     end
@@ -39,16 +39,13 @@ function [P, A, q, l, u, scaling] = modified_ruiz_equilibrate(P, A, q, l, u, sca
     assert(minScaling <= maxScaling, 'modified_ruiz_equilibrate:InvalidScalingBounds', 'options.minScaling must be less than or equal to options.maxScaling.');
     assert(numel(q) == n, 'modified_ruiz_equilibrate:DimensionMismatch', 'q must have %d elements to match the number of columns in P and A.', n);
     assert(numel(l) == m && numel(u) == m, 'modified_ruiz_equilibrate:DimensionMismatch', 'l and u must each have %d elements to match the number of rows in A.', m);
-    assert(all(l <= u), 'modified_ruiz_equilibrate:InvalidBounds', 'Lower bounds l must be less than or equal to upper bounds u element-wise.');
 
     %% 
     scaling.c = 1.0;
     scaling.D = ones(n, 1);
-    scaling.Dinv = ones(n, 1);
     scaling.E = ones(m, 1);
-    scaling.Einv = ones(m, 1);
 
-    for k = 1:scalingInterations
+    for k = 1:scalingIterations
         % Compute column infinity norms of KKT blocks without forming KKT.
         col_norm_P = vecnorm(P, inf); % 1 x n
         col_norm_A = vecnorm(A, inf); % 1 x n
@@ -81,7 +78,7 @@ function [P, A, q, l, u, scaling] = modified_ruiz_equilibrate(P, A, q, l, u, sca
 
         % Cost normalization.
         col_norm_P = vecnorm(P, inf);
-        c_temp = sum(col_norm_P) / n;
+        c_temp = mean(col_norm_P);
         inf_norm_q = norm(q, inf);
         inf_norm_q = clampScaling(inf_norm_q, minScaling, maxScaling);
         c_temp = max(c_temp, inf_norm_q);

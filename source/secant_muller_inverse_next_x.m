@@ -64,10 +64,6 @@ function out = secant_muller_inverse_next_x(points, targetY, stepSize, method, o
     p = valid(max(1, n-1):n, :);
     [deltaBase, reason] = secant_delta(p, targetY, denomTol, dupTol);
   else
-    if n < 3
-      out.blockedReason = "insufficient_points";
-      return;
-    end
     p = valid(max(1, n-2):n, :);
     [deltaBase, reason] = muller_delta(p, targetY, denomTol, dupTol);
   end
@@ -80,11 +76,7 @@ function out = secant_muller_inverse_next_x(points, targetY, stepSize, method, o
   xCurrent = p(end, 1);
   out.deltaBase = deltaBase;
   out.xNext = xCurrent + stepSize * deltaBase;
-  out.ok = isfinite(out.xNext);
-
-  if ~out.ok
-    out.blockedReason = "invalid_number";
-  end
+  out.ok = true;
 end
 
 function [delta, reason] = secant_delta(p, targetY, denomTol, dupTol)

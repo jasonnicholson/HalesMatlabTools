@@ -3,7 +3,7 @@ function app = secant_muller_inverse_app(opts)
 % app = secant_muller_inverse_app() opens the UI and returns handles.
 
 arguments
-  opts.NumRows (1,1) double {mustBeInteger, mustBePositive} = 12
+  opts.NumRows (1,1) double {mustBeInteger, mustBePositive} = 20
   opts.Visible (1,:) char {mustBeMember(opts.Visible, {'on','off'})} = 'on'
 end
 

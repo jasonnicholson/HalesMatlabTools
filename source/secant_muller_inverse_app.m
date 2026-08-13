@@ -16,16 +16,59 @@ function secant_muller_inverse_app(opts)
   uilabel(fig, 'Position', [20 465 60 22], 'Text', 'Target y');
   targetField = uieditfield(fig, 'numeric', 'Position', [85 465 120 22], 'Value', cfg.targetYDefault);
 
-  statusLabel = uilabel(fig, 'Position', [220 465 650 22], 'Text', 'Ready');
+  statusLabel = uilabel(fig, 'Position', [20 438 860 22], 'Text', 'Ready');
 
   tbl = uitable(fig, ...
-    'Position', [20 20 860 430], ...
+    'Position', [20 20 860 410], ...
     'Data', data0, ...
     'ColumnName', cellstr(cfg.columns), ...
     'ColumnEditable', [false true true true true], ...
     'ColumnFormat', {'numeric', cellstr(cfg.methodOptions), 'numeric', 'numeric', 'numeric'}, ...
     'ColumnWidth', {'fit', 'fit', 'fit','auto','auto'}, ...
-    'CellEditCallback', @(src, evt) on_table_edit(src, evt, targetField, statusLabel)); %#ok<NASGU>
+    'CellEditCallback', @(src, evt) on_table_edit(src, evt, targetField, statusLabel));
+
+  uibutton(fig, 'push', ...
+    'Text', 'Load Example', ...
+    'Position', [215 465 95 22], ...
+    'ButtonPushedFcn', @(~, ~) on_load_example(tbl, targetField, cfg, statusLabel));
+
+  uibutton(fig, 'push', ...
+    'Text', 'Clear', ...
+    'Position', [315 465 70 22], ...
+    'ButtonPushedFcn', @(~, ~) on_clear_table(tbl, cfg, statusLabel));
+end
+
+function on_clear_table(tbl, cfg, statusLabel)
+  nRows = size(tbl.Data, 1);
+  tbl.Data = build_default_data(nRows, cfg);
+  statusLabel.Text = 'Cleared. Enter x/y points. Secant needs 2 valid points; Muller needs 3.';
+end
+
+function on_load_example(tbl, targetField, cfg, statusLabel)
+  nRows = size(tbl.Data, 1);
+  tbl.Data = build_default_data(nRows, cfg);
+  targetField.Value = 0;
+
+  example = {
+    1, 'secant', 1, 1.6, 1.0122;
+    2, 'secant', 1, 1.5, 0.9828;
+    3, 'muller', 1, -1.8417, -1.0734;
+    4, 'muller', 1, -0.5038, -0.4667;
+    5, 'muller', 1, 0.2463, 0.2415;
+    6, 'muller', 1, 0.0200, 0.0200;
+    7, 'muller', 1, -7.703e-04, NaN
+  };
+
+  nLoad = min(nRows, size(example, 1));
+  for k = 1:nLoad
+    r = example{k, 1};
+    tbl.Data{r, 2} = example{k, 2};
+    tbl.Data{r, 3} = example{k, 3};
+    tbl.Data{r, 4} = example{k, 4};
+    tbl.Data{r, 5} = example{k, 5};
+  end
+
+  statusLabel.Text = 'Example rows loaded (target y = 0). Edit y, step size, or method to compute next-row x.';
 end
 
 function data = build_default_data(nRows, cfg)

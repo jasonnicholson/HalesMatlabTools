@@ -6,9 +6,13 @@ function setupHalesToolsPath(isSetup)
   end
 
   thisFolder = fileparts(mfilename("fullpath"));
+  folderList = { 
+    thisFolder;
+    fullfile(thisFolder, "secant_muller")
+    };
   if isSetup
-    addpath(thisFolder);
+    addpath(folderList{:});
   else
-    rmpath(thisFolder);
+    rmpath(folderList{:});
   end
 end
